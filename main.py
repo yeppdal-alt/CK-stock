@@ -21,6 +21,9 @@ Streamlit Cloud 배포용 단일 파일 앱 (yfinance + plotly)
 티커나 지표를 바꾸고 싶으면 아래 MACRO_ITEMS / SEMI_ITEMS 딕셔너리(리스트)만 수정하면 됩니다.
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -30,6 +33,8 @@ import plotly.graph_objects as go
 # 기본 설정
 # ------------------------------------------------------------
 st.set_page_config(page_title="투자 지표 대시보드", page_icon="📊", layout="wide")
+
+st.markdown("ck-stock_260720")
 
 st.title("📊 투자환경 & 반도체 지표 대시보드")
 st.caption("데이터 출처: Yahoo Finance (yfinance) · 실시간이 아닌 지연 데이터이며 투자 참고용입니다.")
@@ -62,6 +67,17 @@ st.sidebar.caption(
 # ------------------------------------------------------------
 # 데이터 fetch 유틸
 # ------------------------------------------------------------
+
+
+def fetch_time_text() -> str:
+    """현재 조회 시각을 한국시간(KST)·미국 동부시간(ET) 동시 표기로 반환"""
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    kst = now_utc.astimezone(ZoneInfo("Asia/Seoul"))
+    est = now_utc.astimezone(ZoneInfo("America/New_York"))
+    return (
+        f"🕒 조회시각(KST) {kst.strftime('%Y-%m-%d %H:%M')} "
+        f"| 조회시각(미국 ET) {est.strftime('%Y-%m-%d %H:%M %Z')}"
+    )
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -109,28 +125,37 @@ def single_line_chart(series: pd.Series, height: int = 280, color: str = "#2563e
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=series.index, y=series, mode="lines", line=dict(width=2, color=color)))
     fig.update_layout(
+        title=dict(
+            text=f"<span style='font-size:10.5px;color:#6b7280'>{fetch_time_text()}</span>",
+            x=0.0, xanchor="left", y=0.99, yanchor="top",
+        ),
         template="plotly_white",
         height=height,
-        margin=dict(l=30, r=10, t=10, b=30),
+        margin=dict(l=30, r=10, t=34, b=30),
         hovermode="x unified",
         showlegend=False,
     )
     return fig
 
 
-def normalized_multi_chart(series_dict: dict, title: str, height: int = 430) -> go.Figure:
+def normalized_multi_chart(series_dict: dict, title: str, height: int = 430, colors: dict = None) -> go.Figure:
     """서로 다른 가격 스케일의 자산을 시작점=100 기준 상대 수익률로 비교"""
     fig = go.Figure()
     for name, s in series_dict.items():
         if s is None or s.empty:
             continue
         norm = s / s.iloc[0] * 100
-        fig.add_trace(go.Scatter(x=norm.index, y=norm, mode="lines", name=name, line=dict(width=2)))
+        line_kwargs = dict(width=2)
+        if colors and name in colors:
+            line_kwargs["color"] = colors[name]
+        fig.add_trace(go.Scatter(x=norm.index, y=norm, mode="lines", name=name, line=line_kwargs))
     fig.update_layout(
-        title=title,
+        title=dict(
+            text=f"{title}<br><span style='font-size:10.5px;color:#6b7280'>{fetch_time_text()}</span>",
+        ),
         template="plotly_white",
         height=height,
-        margin=dict(l=40, r=20, t=50, b=30),
+        margin=dict(l=40, r=20, t=65, b=30),
         hovermode="x unified",
         yaxis_title="상대 수익률 (시작일=100)",
         xaxis_title="날짜",
@@ -191,21 +216,33 @@ if not sox_df.empty:
 else:
     st.warning("⚠️ ^SOX 데이터를 불러오지 못했습니다.")
 
-# 2-2. SOXL vs SOXS
-st.subheader("SOXL(3배 롱) vs SOXS(3배 숏) 움직임")
+# 2-2. SOX vs SOXL vs SOXS
+st.subheader("필라델피아 반도체지수(SOX) vs SOXL(3배 롱) vs SOXS(3배 숏) 움직임")
+st.caption("종가 스케일이 서로 달라(지수 포인트 vs ETF 주가) 시작일=100 기준 상대 수익률로 비교합니다.")
 soxl_df = fetch_history("SOXL", period, interval)
 soxs_df = fetch_history("SOXS", period, interval)
-fig_soxls = go.Figure()
-for name, df, color in [("SOXL", soxl_df, "#16a34a"), ("SOXS", soxs_df, "#dc2626")]:
-    if not df.empty:
-        fig_soxls.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name=name, line=dict(width=2, color=color)))
-fig_soxls.update_layout(
-    template="plotly_white", height=380, hovermode="x unified",
-    xaxis_title="날짜", yaxis_title="종가 ($)",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=40, r=20, t=30, b=30),
-)
-st.plotly_chart(fig_soxls, use_container_width=True)
+sox_soxls_series = {
+    "필라델피아 반도체지수 (SOX)": sox_df["Close"] if not sox_df.empty else pd.Series(dtype=float),
+    "SOXL": soxl_df["Close"] if not soxl_df.empty else pd.Series(dtype=float),
+    "SOXS": soxs_df["Close"] if not soxs_df.empty else pd.Series(dtype=float),
+}
+sox_soxls_colors = {
+    "필라델피아 반도체지수 (SOX)": "#2563eb",
+    "SOXL": "#16a34a",
+    "SOXS": "#dc2626",
+}
+if any(not s.empty for s in sox_soxls_series.values()):
+    st.plotly_chart(
+        normalized_multi_chart(
+            sox_soxls_series,
+            "SOX · SOXL · SOXS 상대 수익률 비교",
+            height=400,
+            colors=sox_soxls_colors,
+        ),
+        use_container_width=True,
+    )
+else:
+    st.warning("⚠️ SOX/SOXL/SOXS 데이터를 불러오지 못했습니다.")
 
 # 2-3. SK하이닉스 ADR vs 마이크론
 st.subheader("SK하이닉스 ADR vs 마이크론(MU) 주가 동향")
