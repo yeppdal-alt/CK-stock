@@ -12,6 +12,11 @@ Streamlit Cloud 배포용 단일 파일 앱 (yfinance + plotly)
 - SOXL / SOXS : Direxion Daily Semiconductor Bull/Bear 3X Shares (필라델피아 반도체지수 연동 레버리지/인버스 ETF)
 - SK하이닉스 ADR : 2026년 7월 나스닥 상장 티커 SKHY 사용. 상장 초기라 데이터가 짧을 수 있어
           SKHY 조회 실패 시 OTC 티커 HXSCL, 그래도 실패하면 한국거래소 원주(000660.KS) 순으로 자동 대체합니다.
+          000660.KS는 원화(KRW) 표시이므로 USD/KRW 환율(KRW=X)로 나눠 달러로 환산해 표시합니다.
+          (SKHY, HXSCL은 이미 달러 표시 ADR이라 환산이 필요 없습니다.)
+- 그 외 지표(국채금리·VIX·유가·달러인덱스·ETF·SOX·SOXL/SOXS·MU·NVDA·AMD·ASML)는 모두 달러 또는
+          지수 포인트 기준이라 별도 환산이 필요 없습니다. 원화가 아닌 다른 통화의 티커를 추가할 경우
+          아래 TICKER_FX_PAIR에 {"티커": "환율티커"} 형태로 추가하면 자동으로 달러 환산됩니다.
 
 티커나 지표를 바꾸고 싶으면 아래 MACRO_ITEMS / SEMI_ITEMS 딕셔너리(리스트)만 수정하면 됩니다.
 """
@@ -77,6 +82,27 @@ def fetch_with_fallback(tickers: list, period: str, interval: str):
         if not df.empty:
             return df, t
     return pd.DataFrame(), None
+
+
+# 달러가 아닌 통화로 표시되는 티커 -> 환산에 쓸 환율 티커 매핑
+# (KRW=X 는 "1달러 = X원"을 의미하는 USD/KRW 환율)
+TICKER_FX_PAIR = {
+    "000660.KS": "KRW=X",  # SK하이닉스 한국거래소 원주 (원화 표시)
+}
+
+
+def to_usd(df: pd.DataFrame, ticker: str, period: str, interval: str):
+    """ticker가 TICKER_FX_PAIR에 있으면 환율로 나눠 달러 환산. 없으면(=이미 달러) 그대로 반환."""
+    fx_pair = TICKER_FX_PAIR.get(ticker)
+    if not fx_pair:
+        return df, False
+    fx_df = fetch_history(fx_pair, period, interval)
+    if fx_df.empty:
+        return df, False
+    fx_series = fx_df["Close"].reindex(df.index).ffill().bfill()
+    converted = df.copy()
+    converted["Close"] = df["Close"] / fx_series
+    return converted, True
 
 
 def single_line_chart(series: pd.Series, height: int = 280, color: str = "#2563eb") -> go.Figure:
@@ -187,7 +213,9 @@ skhynix_df, skhynix_ticker = fetch_with_fallback(["SKHY", "HXSCL", "000660.KS"],
 micron_df = fetch_history("MU", period, interval)
 
 if skhynix_ticker:
-    st.caption(f"SK하이닉스 데이터 소스: {skhynix_ticker}")
+    skhynix_df, was_converted = to_usd(skhynix_df, skhynix_ticker, period, interval)
+    note = " · 원화→달러 환산 적용 (USD/KRW 기준)" if was_converted else ""
+    st.caption(f"SK하이닉스 데이터 소스: {skhynix_ticker}{note}")
 else:
     st.warning("⚠️ SK하이닉스 관련 티커(SKHY/HXSCL/000660.KS) 데이터를 모두 불러오지 못했습니다.")
 
